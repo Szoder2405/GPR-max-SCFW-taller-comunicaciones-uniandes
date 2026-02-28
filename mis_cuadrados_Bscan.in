@@ -1,0 +1,18 @@
+#domain: 0.5 0.5 0.5
+#dx_dy_dz: 0.005 0.005 0.005
+#time_window: 5e-9
+
+#material: 6 0 1 0 material_A
+#material: 2 0 1 0 material_B
+
+#box: 0.10 0.10 0.10 0.20 0.20 0.20 material_A
+#box: 0.30 0.10 0.10 0.40 0.20 0.20 material_B
+#box: 0.10 0.30 0.10 0.20 0.40 0.20 material_A
+#box: 0.30 0.30 0.10 0.40 0.40 0.20 material_B
+
+#waveform: ricker 1 1.5e9 mi_pulso
+#hertzian_dipole: z 0.10 0.25 0.45 mi_pulso
+#rx: 0.10 0.25 0.05
+
+#src_steps: 0.005 0 0
+#rx_steps: 0.005 0 0

@@ -1,0 +1,18 @@
+#domain: 0.5 0.5 0.5
+#dx_dy_dz: 0.004 0.004 0.004
+#time_window: 100e-9
+
+
+#material: 4.0 0.001 1 0 diel
+
+
+#box: 0.10 0.10 0.10 0.20 0.20 0.20 diel
+#box: 0.30 0.10 0.10 0.40 0.20 0.20 diel
+#box: 0.10 0.30 0.10 0.20 0.40 0.20 diel
+#box: 0.30 0.30 0.10 0.40 0.40 0.20 diel
+
+#waveform: gaussian 1 2.0e9 mi_pulso
+
+
+#transmission_line: z 0.15 0.25 0.35 50 mi_pulso 
+#transmission_line: z 0.25 0.25 0.35 50 mi_pulso  

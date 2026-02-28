@@ -1,0 +1,39 @@
+Usar steps de máximo 
+#src_steps: 0.005 0 0
+#rx_steps: 0.005 0 0
+
+para entono agua, o de menor longitud para mejor resolución.
+
+===
+
+Para entorno PEC usar
+
+#src_steps: 0.02 0 0
+#rx_steps: 0.02 0 0
+
+===
+
+Para entonro dielétcrico usar
+#src_steps: 0.01 0 0
+#rx_steps: 0.01 0 0
+
+===
+
+Todo se basa en calcular inicialmente la velocidad de onda en el medio v = c/sqrt(e_r), 
+usando la permitividad más alta en el entorno, y luego calcular la lonfitud de onda
+para la frecuencia maxima (3.5GHz en este caso hipotético), dando lugar a la longitud
+de onda mínima.
+
+    A partir de la longitud de onda mínima se define la grilla del entorno (lambda_min / 10)
+    o menor.
+
+    A partir de la longitud de onda mínima se define, por nyquist, la longitud del paso
+    (lambda_min / 4) o menor.
+
+Entre mayor sea el ancho de banda, mayor resolución vertical. En este caso se calcula todo Parauna 
+banda de 0.5GHz a 3.5GHz, para dar lugar a un ancho de banda de 3GHz.
+
+    La resolución axial se calcula como v / 2*B = c / [2*B*sqrt(e_r)] = 1.67 cm 
+    en el peor de los casos.
+
+===
