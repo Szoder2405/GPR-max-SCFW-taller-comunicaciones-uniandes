@@ -1,0 +1,9 @@
+#domain: 0.8 0.8 0.5
+#dx_dy_dz: 0.008 0.008 0.008
+#time_window: 10e-9
+
+#box: 0.25 0.25 0.10 0.35 0.35 0.20 pec
+
+#waveform: gaussian 1 2.5e9 mi_pulso
+
+#transmission_line: z 0.19137931034482758 0.22241379310344828 0.35 50 mi_pulso

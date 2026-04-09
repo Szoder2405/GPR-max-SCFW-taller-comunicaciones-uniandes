@@ -37,3 +37,65 @@ banda de 0.5GHz a 3.5GHz, para dar lugar a un ancho de banda de 3GHz.
     en el peor de los casos.
 
 ===
+
+Para utilzar puslo personalizado.
+
+El archivo debe coincidir con los tiempos de simulación y tener la columna
+
+time mi_pulso
+0.000000000000e+00 -0.000000000000e+00
+1.538461538462e-11 -6.812356210197e-08
+
+fijese que las columnas estan nombradas con "time" y "nombre de la onda"
+
+#excitation_file: sinc_0_6GHz.txt linear 0.0
+
+#transmission_line: z {x_ant} 0.15 0.35 50 mi_pulso
+
+===
+
+VNA:
+
+Usar un VNA (como el ZNL20) para GPR (Radar de Penetración Terrestre) con una sola antena es posible y se denomina configuración monostática. En este modo, la misma antena transmite la señal y recibe el rebote del subsuelo.
+Aquí te explico cómo configurarlo y los desafíos técnicos:
+1. Conexión Física (El Acoplador Direccional)
+El VNA tiene puertos separados (Puerto 1 y Puerto 2). Para usar una sola antena, tienes dos opciones:
+Opción A (Directa): Conecta la antena al Puerto 1. El VNA medirá el parámetro S11 (pérdida de retorno/reflexión). El VNA envía la señal por el Puerto 1 y "escucha" lo que regresa por ese mismo cable.
+Opción B (Con Acoplador Externo): Si necesitas más aislamiento o proteger los receptores, puedes usar un acoplador direccional externo, pero para aplicaciones GPR estándar con VNA, la medición de S11 es la forma directa de trabajar.
+2. Configuración del VNA para GPR
+Un GPR necesita ver "distancia" (profundidad), pero un VNA mide en "frecuencia". Para convertirlo en radar, debes configurar lo siguiente:
+Dominio del Tiempo (Indispensable): Necesitas que el ZNL tenga la opción R&S ZNL-K2 (Time Domain Analysis). Esto hace una Transformada Rápida de Fourier Inversa (IFFT) para convertir los datos de frecuencia en un pulso en el tiempo.
+Barrido de Frecuencia (Step Frequency CW): En lugar de un pulso real, el VNA hace un barrido (ej. de 500 MHz a 3 GHz). Cuanto más ancho sea el ancho de banda (
+), mejor será la resolución de profundidad del GPR.
+Puntos de Medición: Configura un número alto de puntos (ej. 801 o 1601) para tener buen alcance sin ambigüedad.
+3. El Problema del "Pulso Gaussiano" y el Acoplamiento
+Como mencionaste antes lo del pulso gaussiano, en un VNA el "pulso" es matemático. El mayor problema en modo monostático (una antena) es que la reflexión interna de la propia antena es muy fuerte y puede "cegar" al receptor, impidiendo ver objetos cercanos a la superficie.
+Para mitigar esto:
+Calibración "Full One-Port": Calibra en el extremo del cable antes de conectar la antena.
+Gating (Puerta de tiempo): En el software del VNA, usa la función de Gating para eliminar el eco de la antena y quedarte solo con las reflexiones que vienen después (las del suelo).
+4. Resumen de pasos para operar:
+Conecta la antena al Puerto 1.
+Define el rango de frecuencias según la profundidad que busques (baja frecuencia = más profundidad, menos resolución).
+Activa el modo "Time Domain" (Transform Low Pass). Esto simulará el pulso que buscabas.
+Calibra para eliminar el error del cable.
+Mueve la antena sobre el terreno y observa cómo cambian las reflexiones en el eje del tiempo (que ahora representa profundidad).
+Nota crítica: El ZNL20 es un equipo de laboratorio. Para un GPR real de campo, necesitarás protegerlo contra golpes, polvo y asegurar una batería externa estable, ya que no es un equipo diseñado originalmente para ser arrastrado por el terreno.
+
+----
+
+¡Sí, exactamente! Lo que buscas es moldear el espectro para que, al aplicar la Transformada Inversa de Fourier (IFFT), el pulso en el dominio del tiempo sea un pulso gaussiano limpio y sin "anillos" (lóbulos laterales).
+En un VNA, esto no se hace con un filtro físico de hardware, sino mediante el Windowing (Ventaneo) en el software del equipo.
+¿Cómo funciona en el VNA?
+Un barrido de frecuencia estándar es como un filtro pasabanda rectangular (un "cajón" de frecuencias). El problema es que la transformada de una función rectangular es una función Sinc en el tiempo, la cual tiene muchos lóbulos laterales que en GPR se confunden con objetos reales.
+Para que el resultado sea un pulso gaussiano en el tiempo, el barrido de frecuencias debe tener una forma gaussiana. Aquí es donde entra el menú de Time Domain del ZNL20:
+Window Function: Dentro de la configuración de Time Domain (K2), busca la opción "Window".
+Selecciona "Normal" o "Gaussian": El VNA multiplicará matemáticamente tus datos de frecuencia por una curva gaussiana antes de hacer la IFFT.
+Ajusta el ancho (Sidelobe Suppression): Cuanto más "gaussiana" sea la ventana (mayor supresión de lóbulos), más limpio será el pulso, pero también será más ancho (perderás un poco de resolución de profundidad).
+¿Por qué es mejor que un filtro físico?
+Sin pérdidas: Un filtro físico de hardware (como un filtro LC o de cavidad) introduciría pérdida de inserción y ruido. El ventaneo digital es "gratis" en términos de señal.
+Dinámico: Puedes cambiar la "forma" del pulso (de rectangular a Hamming, Hann o Gaussiana) después de haber tomado la medida, simplemente cambiando la configuración en la pantalla.
+Pasos prácticos en el ZNL20:
+Ve a Trace > Time Domain > Time Domain Config.
+Asegúrate de que el modo sea Low Pass Step o Low Pass Impulse (el modo Low Pass es el que mejor emula un pulso real).
+Busca el botón de Window y ajusta el nivel. Un valor de "Normal" suele equivaler a una ventana de Kaiser-Bessel que se comporta casi idéntico a una gaussiana, eliminando los ecos falsos alrededor del pulso principal.
+En resumen: No compres un filtro físico. Usa la función de Windowing en el modo de Dominio del Tiempo del VNA; eso convertirá tu barrido cuadrado en el pulso gaussiano que necesitas para tu GPR.
