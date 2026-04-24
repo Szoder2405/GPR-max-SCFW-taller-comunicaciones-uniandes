@@ -272,11 +272,198 @@ def aplicar_FA2(img_freq_range, x_grid, z_grid, Kc, dK_vec, z_ant, z_surf, eps_r
     return img_freq_range * FA2
 
 # =============================================================================
+# FUNCIONES NUEVAS PARA INVERSIÓN DE PERMITIVIDAD (Sección IV del artículo)
+# =============================================================================
+
+def estimate_phase_error_from_image(img_complex, x_grid, z_grid, z_depth_interest,
+                                    Kc, dK_vec, z_ant, z_surf, eps_guess):
+    """
+    Estima el error de fase φ_e(Kx) a partir de una imagen compleja obtenida
+    con una permitividad errónea. Aplica FA1 y FA2, luego FFT en acimut y
+    ajusta un polinomio cuadrático en Kx en la profundidad de interés.
+
+    Parámetros
+    ----------
+    img_complex : ndarray (nx, nz) complejo
+        Imagen obtenida con SCFBP (sin tomar valor absoluto).
+    x_grid : ndarray
+        Eje X de la imagen.
+    z_grid : ndarray
+        Eje Z (altura) de la imagen.
+    z_depth_interest : float
+        Profundidad (coordenada Z) donde se extraerá la fase.
+    Kc : float
+        Número de onda central.
+    dK_vec : ndarray
+        Vector ΔK = K - Kc para el eje de rango.
+    z_ant, z_surf, eps_guess : floats
+        Geometría y permitividad supuesta.
+
+    Retorna
+    -------
+    p : float
+        Coeficiente cuadrático del ajuste φ_e(Kx) ≈ p * Kx^2.
+    Kx_vals : ndarray
+        Valores de Kx correspondientes a la línea extraída.
+    phase_error : ndarray
+        Fase estimada (desenvuelta) en función de Kx.
+    """
+    # 1. Aplicar FA1 y FA2 (compresión espectral) para alinear los espectros
+    img_fa1 = aplicar_FA1(img_complex, x_grid, z_grid, z_ant, z_surf, eps_guess, Kc)
+    fft_range = fft(img_fa1, axis=1)                     # FFT en rango (eje Z)
+    fft_range = aplicar_FA2(fft_range, x_grid, z_grid, Kc, dK_vec,
+                            z_ant, z_surf, eps_guess)
+
+    # 2. FFT en acimut para pasar al dominio (Kx, z)
+    fft_az = fft(fft_range, axis=0)                      # (nx, nz)
+    nx, nz = fft_az.shape
+    dx = x_grid[1] - x_grid[0]
+    Kx = 2 * np.pi * fftfreq(nx, d=dx)                   # número de onda en acimut
+
+    # 3. Seleccionar la profundidad de interés
+    iz = np.argmin(np.abs(z_grid - z_depth_interest))
+    signal_Kx = fft_az[:, iz]                            # señal compleja en esa profundidad
+
+    # 4. Aislar la región con energía significativa (evitar ruido)
+    mask = np.abs(signal_Kx) > 0.1 * np.max(np.abs(signal_Kx))
+    if not np.any(mask):
+        mask = np.ones_like(signal_Kx, dtype=bool)
+    Kx_masked = Kx[mask]
+    phase = np.angle(signal_Kx[mask])
+    phase_unwrapped = np.unwrap(phase)
+
+    # 5. Ajuste polinómico de grado 2: φ(Kx) = p2 * Kx^2 + p1 * Kx + p0
+    coeffs = np.polyfit(Kx_masked, phase_unwrapped, 2)
+    p2, p1, p0 = coeffs
+
+    # 6. Visualización opcional (comentada para no saturar)
+    # plt.figure()
+    # plt.plot(Kx_masked, phase_unwrapped, 'b.', label='Fase estimada')
+    # Kx_fit = np.linspace(Kx_masked.min(), Kx_masked.max(), 200)
+    # plt.plot(Kx_fit, np.polyval(coeffs, Kx_fit), 'r-', label='Ajuste cuadrático')
+    # plt.xlabel('Kx (rad/m)')
+    # plt.ylabel('Fase (rad)')
+    # plt.title('Error de fase estimado')
+    # plt.legend()
+    # plt.show()
+
+    return p2, Kx_masked, phase_unwrapped
+
+
+def invert_permittivity_from_p(p, Kc, x_ref=0.30, z_ref=0.15,
+                               z_ant=0.35, z_surf=0.30, eps_guess=2.0):
+    """
+    Invierte ε_r a partir del coeficiente cuadrático p usando la relación
+    deducida en el artículo (ecs. 38-43). Se emplea un método de bisección.
+
+    Parámetros
+    ----------
+    p : float
+        Coeficiente cuadrático de φ_e(Kx) ≈ p * Kx^2.
+    Kc : float
+        Número de onda central (rad/m).
+    x_ref, z_ref : floats
+        Coordenadas del punto de referencia utilizado para la estimación
+        (normalmente el centro del blanco).
+    z_ant, z_surf, eps_guess : floats
+        Geometría y permitividad inicial (solo se usa para el intervalo de búsqueda).
+
+    Retorna
+    -------
+    eps_inv : float
+        Permitividad relativa estimada.
+    """
+    # Funciones auxiliares definidas en el artículo
+    def gamma_k(z):
+        # altura efectiva de la antena sobre la superficie
+        return z_ant - z_surf
+
+    def gamma_c(z):
+        # profundidad del punto
+        return z_surf - z
+
+    y_k = gamma_k(z_ref)
+    y_c = gamma_c(z_ref)
+
+    # Relación teórica p(ε_r) según ec. (43) junto con (41)
+    def p_theoretical(eps_r):
+        # g2 aproximado (ec. 41)
+        term1 = (np.sqrt(eps_guess) - np.sqrt(eps_r)) / (eps_guess * y_c)
+        term2 = np.sqrt(eps_r) * (np.sqrt(eps_guess) + 1) * \
+                (1/np.sqrt(eps_guess) - 1/np.sqrt(eps_r)) * (2 / y_k)
+        g2 = term1 + term2
+        denom = Kc * (eps_r / y_k + 1 / (np.sqrt(eps_r) * y_c))**2
+        return g2 / denom
+
+    # Función para bisección
+    def f(eps_r):
+        return p_theoretical(eps_r) - p
+
+    # Intervalo de búsqueda (basado en valores típicos de arena: 3 a 10)
+    eps_min, eps_max = 2.5, 12.0
+    try:
+        eps_inv = brentq(f, eps_min, eps_max, xtol=1e-4)
+    except ValueError:
+        print("Bisección falló; se devuelve el valor medio del intervalo.")
+        eps_inv = (eps_min + eps_max) / 2
+
+    return eps_inv
+
+
+def pga_residual_correction(img_complex, x_grid, z_grid, Kc, dK_vec,
+                            z_ant, z_surf, eps_r):
+    """
+    Aplica una corrección de fase residual (estilo PGA) a la imagen
+    después de la inversión de permitividad. Opera en el dominio Kx.
+
+    Retorna la imagen corregida (compleja).
+    """
+    # 1. Compresión espectral
+    img_fa1 = aplicar_FA1(img_complex, x_grid, z_grid, z_ant, z_surf, eps_r, Kc)
+    fft_range = fft(img_fa1, axis=1)
+    fft_range = aplicar_FA2(fft_range, x_grid, z_grid, Kc, dK_vec, z_ant, z_surf, eps_r)
+
+    # 2. FFT acimut
+    fft_az = fft(fft_range, axis=0)
+    nx, nz = fft_az.shape
+    dx = x_grid[1] - x_grid[0]
+    Kx = 2 * np.pi * fftfreq(nx, d=dx)
+
+    # 3. Estimar fase residual en una profundidad de alto contraste
+    #    (por simplicidad tomamos la profundidad con máxima energía promedio)
+    energy = np.sum(np.abs(fft_az), axis=0)
+    iz = np.argmax(energy)
+    signal_Kx = fft_az[:, iz]
+    mask = np.abs(signal_Kx) > 0.1 * np.max(np.abs(signal_Kx))
+    phase = np.angle(signal_Kx[mask])
+    Kx_masked = Kx[mask]
+    coeffs = np.polyfit(Kx_masked, np.unwrap(phase), 2)
+    phase_correction = np.polyval(coeffs, Kx)
+
+    # 4. Aplicar corrección a todos los rangos
+    correction = np.exp(-1j * phase_correction[:, np.newaxis])
+    fft_az_corrected = fft_az * correction
+
+    # 5. Transformada inversa
+    img_corrected_range = ifft(fft_az_corrected, axis=0)
+    img_corrected = ifft(img_corrected_range, axis=1)
+
+    return img_corrected
+
+
+# =============================================================================
+# MODIFICACIÓN DE scfbp_2d_completo PARA DEVOLVER IMAGEN COMPLEJA
+# =============================================================================
+
+# =============================================================================
 # 6. FUSIÓN JERÁRQUICA COMPLETA (SCFBP)
 # =============================================================================
 def scfbp_2d_completo(traces, x_ant, tiempo, x_grid_base, z_grid, z_ant, z_surf, eps_r,
-                      suba_size, up_factor):
+                      suba_size, up_factor, return_complex=False):
     """
+    Versión modificada: si return_complex=True, devuelve la imagen compleja
+    final sin tomar valor absoluto. Los frames del vídeo siempre se toman en magnitud.
+
     Implementa el SCFBP completo:
     1. Divide en subaperturas.
     2. Genera sub‑imágenes con BP (tiempo).
@@ -383,10 +570,15 @@ def scfbp_2d_completo(traces, x_ant, tiempo, x_grid_base, z_grid, z_ant, z_surf,
         sub_grids_x = new_grids_x
         nivel += 1
 
-    final_img = sub_images[0]
-    if np.max(final_img) > 0:
-        final_img /= np.max(final_img)
-    return final_img, frames, sub_grids_x[0]
+    # Al final, antes de devolver:
+    final_img_complex = sub_images[0]          # imagen compleja final
+    if return_complex:
+        return final_img_complex, frames, sub_grids_x[0]
+    else:
+        final_img_mag = np.abs(final_img_complex)
+        if np.max(final_img_mag) > 0:
+            final_img_mag /= np.max(final_img_mag)
+        return final_img_mag, frames, sub_grids_x[0]
 
 # =============================================================================
 # 7. VISUALIZACIÓN (profundidad aumentando hacia abajo)
@@ -570,14 +762,76 @@ if __name__ == "__main__":
     else:
         print("No hay datos en esa ventana temporal.")
 
+    # -------------------------------------------------------------------------
+    # PRIMERA PASADA: con permitividad errónea (estimación)
+    # -------------------------------------------------------------------------
 
-    print("=== EJECUTANDO SCFBP COMPLETO ===")
-    final_img, frames, x_final = scfbp_2d_completo(data_filtrada, x_ant_positions, tiempo,
-                                                    X_IMG, Z_IMG, Z_ANT, Z_SURFACE, EPS_R,
-                                                    SUBA_PER_SIZE, UPSAMPLE_FACTOR)
+    eps_guess = EPS_R                     # valor inicial incorrecto
+    print(f"\n=== PRIMERA PASADA SCFBP (ε_r = {eps_guess}) ===")
+    img_complex, frames, x_final = scfbp_2d_completo(
+        data_filtrada, x_ant_positions, tiempo,
+        X_IMG, Z_IMG, Z_ANT, Z_SURFACE, eps_guess,
+        SUBA_PER_SIZE, UPSAMPLE_FACTOR,
+        return_complex=True)            # <-- obtener imagen compleja
 
+    # Parámetros para la estimación
+    fc = (BANDA_PASA[0] + BANDA_PASA[1]) / 2
+    Kc = 4 * np.pi * fc / c
+    ky = fftfreq(len(Z_IMG), d=dz)
+    K = ky / np.sqrt(eps_guess)         # usar eps_guess para definir K
+    dK_vec = K - Kc
+
+    # Profundidad de interés: centro del bloque metálico (z = 0.15 m)
+    z_ref = 0.15
+    print("Estimando error de fase...")
+    p, Kx_vals, phase_err = estimate_phase_error_from_image(
+        img_complex, x_final, Z_IMG, z_ref,
+        Kc, dK_vec, Z_ANT, Z_SURFACE, eps_guess)
+
+    print(f"Coeficiente cuadrático estimado p = {p:.3e}")
+
+    # Inversión de permitividad
+    eps_inverted = invert_permittivity_from_p(
+        p, Kc, x_ref=0.30, z_ref=z_ref,
+        z_ant=Z_ANT, z_surf=Z_SURFACE, eps_guess=eps_guess)
+
+    print(f"Permitividad invertida: ε_r = {eps_inverted:.3f}")
+
+    # -------------------------------------------------------------------------
+    # SEGUNDA PASADA: con permitividad corregida
+    # -------------------------------------------------------------------------
+    print(f"\n=== SEGUNDA PASADA SCFBP (ε_r = {eps_inverted:.3f}) ===")
+    final_img_corrected, frames2, x_final2 = scfbp_2d_completo(
+        data_filtrada, x_ant_positions, tiempo,
+        X_IMG, Z_IMG, Z_ANT, Z_SURFACE, eps_inverted,
+        SUBA_PER_SIZE, UPSAMPLE_FACTOR,
+        return_complex=False)            # ya devuelve magnitud normalizada
+
+    # -------------------------------------------------------------------------
+    # COMPENSACIÓN RESIDUAL (OPCIONAL)
+    # -------------------------------------------------------------------------
+    # Si se desea aplicar PGA residual, se puede obtener la imagen compleja
+    # de la segunda pasada y corregir:
+    img_complex2, _, _ = scfbp_2d_completo(
+        data_filtrada, x_ant_positions, tiempo,
+        X_IMG, Z_IMG, Z_ANT, Z_SURFACE, eps_inverted,
+        SUBA_PER_SIZE, UPSAMPLE_FACTOR,
+        return_complex=False)
+    img_final = pga_residual_correction(img_complex2, x_final2, Z_IMG,
+                                         Kc, dK_vec, Z_ANT, Z_SURFACE, eps_inverted)
+    final_img_corrected = np.abs(img_final) / np.max(np.abs(img_final))
+
+    # -------------------------------------------------------------------------
+    # VISUALIZACIÓN
+    # -------------------------------------------------------------------------
     print("=== MOSTRANDO RESULTADOS ===")
-    graficar_resultados(final_img, x_final, Z_IMG, Z_ANT, frames, x_final, OUT_VIDEO, False)
+    graficar_resultados(final_img_corrected, x_final2, Z_IMG, Z_ANT,
+                        frames2, x_final2, OUT_VIDEO, guardar_video=False)
+
+    print("\nResumen de permitividad:")
+    print(f"  Valor real:        {EPS_R}")
+    print(f"  Valor inicial:     {eps_guess}")
+    print(f"  Valor invertido:   {eps_inverted:.3f}")
 
     """
     print("=== EJECUTANDO BP DIRECTO ===")
