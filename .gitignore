@@ -1,4 +1,3 @@
 "*.out" 
 "temp_cscan_output/" 
-"*.npy" 
 "*.npz" 
