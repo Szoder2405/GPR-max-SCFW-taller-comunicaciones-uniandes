@@ -9,7 +9,7 @@ import numpy as np
 import math
 import h5py
 import matplotlib.pyplot as plt
-from scipy.fft import fft, ifft, fftfreq
+from scipy.fft import fft, ifft, fftfreq, fftshift, fft2
 from scipy.signal import savgol_filter, hilbert
 from scipy.signal.windows import tukey
 from scipy.interpolate import interp1d, RegularGridInterpolator
@@ -18,6 +18,8 @@ import plotly.graph_objects as go
 import subprocess
 import os
 import glob
+from fpdf import FPDF
+import matplotlib.gridspec as gridspec
 
 # =============================================================================
 # PARÁMETROS GLOBALES (C‑scan)
@@ -195,74 +197,6 @@ def aplicar_filtros_3d(data_3d, dt):
 # =============================================================================
 # 4. BACK-PROJECTION PARA UNA SUBA PERTURA (dominio tiempo, con refracción)
 # =============================================================================
-# Version antigua
-
-'''def sub_image_bp(traces, x_ant, tiempo, x_grid, z_grid, z_ant, z_surf, eps_r):
- 
-    nx, nz = len(x_grid), len(z_grid)
-    img = np.zeros((nx, nz))
-    n_sub = len(x_ant)
-
-    # Pre‑calcular interpoladores para cada traza
-    interp = [interp1d(tiempo, traces[:, i], kind='linear', bounds_error=False, fill_value=0) for i in range(n_sub)]
-
-    for ix, xp in enumerate(x_grid):
-        for iz, zp in enumerate(z_grid):
-            suma = 0.0
-            for i in range(n_sub):
-                t = tiempo_viaje(x_ant[i], xp, zp, z_ant, z_surf, eps_r) #* 1e9   # a ns
-                if 0 < t < tiempo[-1]:
-                    suma += interp[i](t)
-            img[ix, iz] = suma
-    return img
-
-def bp_directo(traces, x_ant, tiempo, x_grid, z_grid, z_ant, z_surf, eps_r):
-    nx, nz = len(x_grid), len(z_grid)
-    img = np.zeros((nx, nz))
-    interp = [interp1d(tiempo, traces[:, i], kind='linear', bounds_error=False, fill_value=0) for i in range(len(x_ant))]
-    for ix, xp in enumerate(x_grid):
-        for iz, zp in enumerate(z_grid):
-            suma = 0.0
-            for i in range(len(x_ant)):
-                t = tiempo_viaje(x_ant[i], xp, zp, z_ant, z_surf, eps_r)  # en segundos
-                if tiempo[0] <= t <= tiempo[-1]:
-                    suma += interp[i](t)
-            img[ix, iz] = suma
-    return img'''
-
-# Versión corregida
-'''
-def bp_directo(traces, x_ant, tiempo, x_grid, z_grid, z_ant, z_surf, eps_r):
-    nx, nz = len(x_grid), len(z_grid)
-    img = np.zeros((nx, nz), dtype=np.complex128)
-    interp_real = [interp1d(tiempo, np.real(traces[:, i]), kind='linear', bounds_error=False, fill_value=0) for i in range(len(x_ant))]
-    interp_imag = [interp1d(tiempo, np.imag(traces[:, i]), kind='linear', bounds_error=False, fill_value=0) for i in range(len(x_ant))]
-    for ix, xp in enumerate(x_grid):
-        for iz, zp in enumerate(z_grid):
-            suma = 0.0 + 0.0j
-            for i in range(len(x_ant)):
-                t = tiempo_viaje(x_ant[i], xp, zp, z_ant, z_surf, eps_r)
-                if tiempo[0] <= t <= tiempo[-1]:
-                    suma += interp_real[i](t) + 1j * interp_imag[i](t)
-            img[ix, iz] = suma
-    return img
-
-def sub_image_bp(traces, x_ant, tiempo, x_grid, z_grid, z_ant, z_surf, eps_r):
-    nx, nz = len(x_grid), len(z_grid)
-    img = np.zeros((nx, nz), dtype=np.complex128)
-    n_sub = len(x_ant)
-    interp_real = [interp1d(tiempo, np.real(traces[:, i]), kind='linear', bounds_error=False, fill_value=0) for i in range(n_sub)]
-    interp_imag = [interp1d(tiempo, np.imag(traces[:, i]), kind='linear', bounds_error=False, fill_value=0) for i in range(n_sub)]
-    for ix, xp in enumerate(x_grid):
-        for iz, zp in enumerate(z_grid):
-            suma = 0.0 + 0.0j
-            for i in range(n_sub):
-                t = tiempo_viaje(x_ant[i], xp, zp, z_ant, z_surf, eps_r)
-                if tiempo[0] <= t <= tiempo[-1]:
-                    suma += interp_real[i](t) + 1j * interp_imag[i](t)
-            img[ix, iz] = suma
-    return img
-'''
 
 # Versión vectorizada
 
@@ -443,16 +377,6 @@ def estimate_phase_error_from_image(img_complex, x_grid, z_grid, z_depth_interes
     coeffs = np.polyfit(Kx_masked, phase_unwrapped, 2)
     p2, p1, p0 = coeffs
 
-    # 6. Visualización opcional (comentada para no saturar)
-    # plt.figure()
-    # plt.plot(Kx_masked, phase_unwrapped, 'b.', label='Fase estimada')
-    # Kx_fit = np.linspace(Kx_masked.min(), Kx_masked.max(), 200)
-    # plt.plot(Kx_fit, np.polyval(coeffs, Kx_fit), 'r-', label='Ajuste cuadrático')
-    # plt.xlabel('Kx (rad/m)')
-    # plt.ylabel('Fase (rad)')
-    # plt.title('Error de fase estimado')
-    # plt.legend()
-    # plt.show()
 
     return p2, Kx_masked, phase_unwrapped
 
@@ -581,31 +505,6 @@ def scfbp_2d_completo(traces, x_ant, tiempo, x_grid_base, z_grid, z_ant, z_surf,
         img = sub_image_bp(traces_sub, x_sub, tiempo, x_grid_base, z_grid, z_ant, z_surf, eps_r)
         sub_images.append(img)
         sub_grids_x.append(x_grid_base.copy())
-
-    # --- Depuración: mostrar las dos primeras subimágenes y sus espectros ---
-    '''
-    if len(sub_images) >= 2:
-        
-        from scipy.fft import fft2, fftshift
-        plt.figure(figsize=(12, 5))
-        plt.subplot(2, 2, 1)
-        plt.imshow(np.abs(sub_images[0]).T, aspect='auto', origin='lower')
-        plt.title('Subimagen 0 (magnitud)')
-        plt.colorbar()
-        plt.subplot(2, 2, 2)
-        plt.imshow(np.abs(sub_images[1]).T, aspect='auto', origin='lower')
-        plt.title('Subimagen 1 (magnitud)')
-        plt.colorbar()
-        plt.subplot(2, 2, 3)
-        plt.imshow(np.log10(np.abs(fftshift(fft2(sub_images[0]))) + 1e-12).T, aspect='auto')
-        plt.title('Espectro 2D Sub0')
-        plt.colorbar()
-        plt.subplot(2, 2, 4)
-        plt.imshow(np.log10(np.abs(fftshift(fft2(sub_images[1]))) + 1e-12).T, aspect='auto')
-        plt.title('Espectro 2D Sub1')
-        plt.colorbar()
-        plt.tight_layout()
-        plt.show()'''
 
     # Número de onda central
     fc = FRECUENCIA_CENTRAL_PULSO
@@ -1224,6 +1123,227 @@ def debug_scfbp_with_synthetic():
 
     return img_scfbp_norm, img_bp_norm
 
+def generar_informe_pdf(traces_2d, x_ant_pos, tiempo, X_IMG, Z_IMG, z_ant, z_surf, eps_r,
+                        suba_size, up_factor_fallback, fc, bw, dt, nt, target_x, target_z,
+                        filename="informe_scfbp.pdf"):
+    """
+    Genera un PDF detallado con todo el flujo del algoritmo SCFBP.
+    """
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    def clean_text(txt):
+        """Reemplaza caracteres Unicode problemáticos y fuerza codificación latin-1"""
+        return txt.replace('\u2011', '-').replace('\u2013', '-').replace('\u2014', '-').encode('latin-1', errors='replace').decode('latin-1')
+    
+    # Desactivar pie de página automático
+    #pdf.set_footer_text('')
+
+    # ---- Página 1: Descripción del modelo y geometría ----
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, clean_text("Informe del Algoritmo SCFBP para GPR-SAR"), ln=True, align="C")
+    pdf.ln(8)
+    pdf.set_font("Arial", "", 11)
+    texto_intro = (
+        "Este documento describe paso a paso la implementacion del algoritmo Subsurface Cartesian "
+        "Factorized Back-Projection (SCFBP) basado en Zhou et al. (2025).\n\n"
+        f"Geometria: antena a z_ant={z_ant} m, superficie en z_surf={z_surf} m. "
+        f"Permitividad del subsuelo = {eps_r}. Blanco PEC en "
+        f"x={target_x} m, z={target_z} m.\n\n"
+        "Parametros del pulso: frecuencia central fc = {:.2f} GHz, ancho de banda = {:.2f} GHz, "
+        "dt = {:.3e} s, nt = {}.\n".format(fc/1e9, bw/1e9, dt, nt)
+    )
+    pdf.multi_cell(0, 6, clean_text(texto_intro))
+
+    # ---- 1. A‑scan representativo ----
+    idx_ant = len(x_ant_pos)//2
+    traza = traces_2d[:, idx_ant]
+    fig1, ax1 = plt.subplots(figsize=(8,3))
+    ax1.plot(tiempo*1e9, np.real(traza), 'b', lw=1)
+    ax1.set_xlabel("Tiempo (ns)")
+    ax1.set_ylabel("Amplitud")
+    ax1.set_title(clean_text("A-scan en la posicion central x={:.3f} m".format(x_ant_pos[idx_ant])))
+    ax1.grid(True)
+    fig1.savefig("temp_ascan.png", dpi=200, bbox_inches="tight")
+    plt.close(fig1)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, clean_text("1. A-scan (traza unica)"), ln=True)
+    pdf.image("temp_ascan.png", x=15, w=180)
+    pdf.ln(4)
+    pdf.set_font("Arial", "", 10)
+    pdf.multi_cell(0, 5, clean_text(
+        "Se muestra la senal reflejada Vref(t) en la antena central. "
+        "El pico alrededor de 1-2 ns corresponde al acoplamiento directo; "
+        "la reflexion del blanco aparece cerca de 4-5 ns."
+    ))
+
+    # ---- 2. Espectro antes/después de filtro ----
+    freq = fftfreq(nt, d=dt)
+    Vref_f = np.abs(fft(traza))
+    mask_pos = freq >= 0
+    fig2, (ax2a, ax2b) = plt.subplots(2,1, figsize=(8,5))
+    ax2a.plot(freq[mask_pos]/1e9, Vref_f[mask_pos], 'k', lw=1)
+    ax2a.set_title(clean_text("Espectro crudo de Vref"))
+    ax2b.plot(freq[mask_pos]/1e9, Vref_f[mask_pos], 'k', lw=1)
+    ax2b.set_xlabel(clean_text("Frecuencia (GHz)"))
+    ax2b.set_ylabel(clean_text("Magnitud"))
+    ax2b.set_title(clean_text("Espectro despues de filtro pasa-banda"))
+    ax2b.axvspan(0.5, 2.5, alpha=0.2, color='blue')
+    ax2a.grid(True); ax2b.grid(True)
+    fig2.savefig("temp_espectro.png", dpi=200, bbox_inches="tight")
+    plt.close(fig2)
+
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, clean_text("2. Preprocesamiento: Filtrado pasa-banda"), ln=True)
+    pdf.image("temp_espectro.png", x=15, w=180)
+    pdf.ln(4)
+    pdf.set_font("Arial", "", 10)
+    pdf.multi_cell(0, 5, clean_text(
+        "El filtro elimina componentes fuera de 0.5-2.5 GHz, conservando la energia del pulso."
+    ))
+
+    # ---- 3. B‑scan completo ----
+    fig3, ax3 = plt.subplots(figsize=(8,4))
+    extent = [X_IMG[0], X_IMG[-1], tiempo[-1]*1e9, 0]
+    ax3.imshow(np.abs(traces_2d), aspect='auto', extent=extent, cmap='gray')
+    ax3.set_xlabel(clean_text("Posicion X (m)"))
+    ax3.set_ylabel(clean_text("Tiempo (ns)"))
+    ax3.set_title(clean_text("B-scan (envolvente)"))
+    fig3.savefig("temp_bscan.png", dpi=200, bbox_inches="tight")
+    plt.close(fig3)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, clean_text("3. B-scan (radargrama)"), ln=True)
+    pdf.image("temp_bscan.png", x=15, w=180)
+    pdf.ln(4)
+
+    # ---- 4. BP directo vs SCFBP ----
+    img_bp = bp_directo(traces_2d, x_ant_pos, tiempo, X_IMG, Z_IMG, z_ant, z_surf, eps_r)
+    img_scfbp, frames, x_final = scfbp_2d_completo(
+        traces_2d, x_ant_pos, tiempo, X_IMG, Z_IMG, z_ant, z_surf, eps_r,
+        suba_size=suba_size, up_factor_fallback=up_factor_fallback, return_complex=False,
+        target_x_grid=X_IMG
+    )
+
+    fig4, (ax4a, ax4b, ax4c) = plt.subplots(1,3, figsize=(12,4))
+    bp_mag = np.abs(img_bp)
+    scfbp_mag = np.abs(img_scfbp)
+    ax4a.imshow(bp_mag.T, extent=[X_IMG[0], X_IMG[-1], Z_IMG[-1], Z_IMG[0]], cmap='gray', aspect='auto')
+    ax4a.set_title(clean_text("BP directo"))
+    ax4b.imshow(scfbp_mag.T, extent=[X_IMG[0], X_IMG[-1], Z_IMG[-1], Z_IMG[0]], cmap='gray', aspect='auto')
+    ax4b.set_title(clean_text("SCFBP"))
+    diff = np.abs(bp_mag - scfbp_mag)
+    ax4c.imshow(diff.T, extent=[X_IMG[0], X_IMG[-1], Z_IMG[-1], Z_IMG[0]], cmap='hot', aspect='auto')
+    ax4c.set_title(clean_text("Diferencia"))
+    for ax in [ax4a, ax4b, ax4c]:
+        ax.plot(target_x, target_z, 'ro', markersize=6, fillstyle='none')
+    fig4.savefig("temp_comparacion.png", dpi=200, bbox_inches="tight")
+    plt.close(fig4)
+
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, clean_text("4. Comparacion BP directo vs SCFBP"), ln=True)
+    pdf.image("temp_comparacion.png", x=15, w=180)
+    pdf.ln(4)
+    mse = np.mean((bp_mag/np.max(bp_mag) - scfbp_mag/np.max(scfbp_mag))**2)
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(0, 6, clean_text(f"MSE entre BP y SCFBP: {mse:.6f}"), ln=True)
+
+    # ---- 5. Sub‑aperturas y fusión ----
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, clean_text("5. Proceso de fusion jerarquica (sub-aperturas)"), ln=True)
+    pdf.ln(4)
+    max_frames = min(4, len(frames))
+    fig5, axes5 = plt.subplots(1, max_frames, figsize=(4*max_frames, 4))
+    if max_frames == 1:
+        axes5 = [axes5]
+    for i, ax in enumerate(axes5):
+        ax.imshow(frames[i].T, extent=[X_IMG[0], X_IMG[-1], Z_IMG[-1], Z_IMG[0]], cmap='gray', aspect='auto')
+        ax.set_title(clean_text(f"Nivel {i+1}"))
+        ax.plot(target_x, target_z, 'ro', markersize=4, fillstyle='none')
+    fig5.savefig("temp_fusion.png", dpi=200, bbox_inches="tight")
+    plt.close(fig5)
+    pdf.image("temp_fusion.png", x=15, w=180)
+    pdf.ln(4)
+    pdf.set_font("Arial", "", 10)
+    pdf.multi_cell(0, 5, clean_text(
+        "Secuencia de imagenes durante la fusion. Se observa como la energia converge hacia el blanco. "
+        "En cada nivel se aplican FA1, FA2 y upsampling adaptativo."
+    ))
+
+    # ---- 6. Compresión espectral FA1 / FA2 sobre la primera subimagen ----
+    suba_indices = [list(range(i, min(i+suba_size, len(x_ant_pos)))) for i in range(0, len(x_ant_pos), suba_size)]
+    traces_sub = traces_2d[:, suba_indices[0]]
+    sub_img = sub_image_bp(traces_sub, x_ant_pos[suba_indices[0]], tiempo, X_IMG, Z_IMG, z_ant, z_surf, eps_r)
+    fc_val = FRECUENCIA_CENTRAL_PULSO
+    Kc = 4*np.pi*fc_val/c
+    dz = Z_IMG[1]-Z_IMG[0]
+    ky = 2*np.pi*fftfreq(len(Z_IMG), d=dz)
+    K = compute_K_from_ky(ky, eps_r)
+    dK_vec = K - Kc
+    sub_FA1 = aplicar_FA1(sub_img, X_IMG, Z_IMG, z_ant, z_surf, eps_r, Kc)
+    fft_sub = fft(sub_FA1, axis=1)
+    centro = (X_IMG[0]+X_IMG[-1])/2
+    fft_FA2 = aplicar_FA2(fft_sub, X_IMG-centro, Z_IMG, Kc, dK_vec, z_ant, z_surf, eps_r)
+    spec_orig = np.log10(np.abs(fftshift(fft2(sub_img)))+1e-12)
+    spec_fa1 = np.log10(np.abs(fftshift(fft2(sub_FA1)))+1e-12)
+    spec_fa2 = np.log10(np.abs(fftshift(fft(fft_FA2, axis=0)))+1e-12)
+
+    fig6, (ax6a, ax6b, ax6c) = plt.subplots(1,3, figsize=(12,4))
+    ax6a.imshow(spec_orig.T, aspect='auto', cmap='jet')
+    ax6a.set_title(clean_text("Original"))
+    ax6b.imshow(spec_fa1.T, aspect='auto', cmap='jet')
+    ax6b.set_title(clean_text("Despues de FA1"))
+    ax6c.imshow(spec_fa2.T, aspect='auto', cmap='jet')
+    ax6c.set_title(clean_text("Despues de FA2"))
+    fig6.savefig("temp_espectro_comp.png", dpi=200, bbox_inches="tight")
+    plt.close(fig6)
+
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, clean_text("6. Compresion espectral FA1 y FA2"), ln=True)
+    pdf.image("temp_espectro_comp.png", x=15, w=180)
+    pdf.ln(4)
+    pdf.set_font("Arial", "", 10)
+    pdf.multi_cell(0, 5, clean_text(
+        "Espectros 2D de una sub-imagen. FA1 centra el soporte en Kx=0; FA2 elimina la inclinacion, "
+        "reduciendo el NSR necesario para la fusion."
+    ))
+
+    # ---- 7. Corte 3D del volumen (si existe) ----
+    if os.path.exists("volumen_3d.npy"):
+        vol = np.load("volumen_3d.npy")
+        iz_slice = np.argmin(np.abs(Z_IMG - 0.15))
+        slice_xy = vol[:, iz_slice, :]
+        fig7, ax7 = plt.subplots(figsize=(6,5))
+        ax7.imshow(slice_xy.T, extent=[X_IMG[0], X_IMG[-1], Y_IMG[0], Y_IMG[-1]], origin='lower', cmap='gray')
+        ax7.set_title(clean_text("C-scan a z=0.15 m"))
+        ax7.set_xlabel(clean_text("X (m)")); ax7.set_ylabel(clean_text("Y (m)"))
+        fig7.savefig("temp_cscan.png", dpi=200, bbox_inches="tight")
+        plt.close(fig7)
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 8, clean_text("7. Resultado final: C-scan"), ln=True)
+        pdf.image("temp_cscan.png", x=15, w=150)
+        pdf.ln(4)
+        pdf.set_font("Arial", "", 10)
+        pdf.multi_cell(0, 5, clean_text(
+            "Imagen horizontal a la profundidad del blanco. Se distingue la firma del bloque PEC "
+            "centrada en (0.30,0.30) m."
+        ))
+
+    # ---- Limpieza de temporales ----
+    for temp in ["temp_ascan.png","temp_espectro.png","temp_bscan.png","temp_comparacion.png",
+                 "temp_fusion.png","temp_espectro_comp.png","temp_cscan.png"]:
+        if os.path.exists(temp): os.remove(temp)
+
+    pdf.output(filename)
+    print(f"Informe guardado como: {filename}")
+
 # =============================================================================
 # 7. SCRIPT PRINCIPAL
 # =============================================================================
@@ -1326,6 +1446,15 @@ if __name__ == "__main__":
     print("¡Procesamiento C‑scan completado!")
     '''
 
+    generar_informe_pdf(
+        data_filtrada_3d[:, :, iy_central], x_ant_pos, tiempo, X_IMG, Z_IMG, Z_ANT, Z_SURFACE,
+        EPS_R, SUBA_PER_SIZE, UPSAMPLE_FACTOR_FALLBACK,
+        FRECUENCIA_CENTRAL_PULSO, BANDA_PASA[1]-BANDA_PASA[0], dt, nt,
+        target_x=0.30, target_z=0.15, filename="informe_scfbp.pdf"
+    )
+
+    '''
+
     # -------------------------------------------------------------------------
     # 3a. Procesar volumen con acimut en X (planos X‑Z para cada Y)
     # -------------------------------------------------------------------------
@@ -1413,6 +1542,6 @@ if __name__ == "__main__":
     visualizar_cscan(volumen_fused, X_IMG, Z_IMG, Y_IMG, z_slice=0.15)
 
     print("¡Procesamiento C‑scan con fusión ortogonal completado!")
-
+    '''
 
     #debug_scfbp_with_synthetic()
